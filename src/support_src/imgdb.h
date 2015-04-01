@@ -22,6 +22,7 @@
 
 #include "ltga.h"
 #include "socks.h"
+#include "netimg.h"
 
 #ifdef _WIN32
 #define IMGDB_DIRSEP "\\"
@@ -61,7 +62,7 @@ public:
   void handleqry();
   char recvqry(int sd, iqry_t *iqry);
   double marshall_imsg(imsg_t *imsg);
-  int sendpkt(int sd, char *pkt, int size);
+  int sendpkt(int sd, char *pkt, int size, ihdr_t *ack);
   void sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg);
 };  
 

@@ -23,6 +23,11 @@
 #include <limits.h>        // LONG_MAX, INT_MAX
 #include <iostream>
 using namespace std;
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>      // socklen_t
+#include "wingetopt.h"
+#else
 #include <string.h>        // memset(), memcmp(), strlen(), strcpy(), memcpy()
 #include <unistd.h>        // getopt(), STDIN_FILENO, gethostname()
 #include <signal.h>        // signal()
@@ -32,6 +37,7 @@ using namespace std;
 #include <sys/types.h>     // u_short
 #include <sys/socket.h>    // socket API, setsockopt(), getsockname()
 #include <sys/ioctl.h>     // ioctl(), FIONBIO
+#endif
 #ifdef __APPLE__
 #include <OpenGL/gl.h>
 #else
@@ -43,9 +49,6 @@ using namespace std;
 #include "netimg.h"
 #include "imgdb.h"
 #include "fec.h"
-
-#define MINPROB 0.011
-#define MAXPROB 0.11
 
 /*
  * imgdb_args: parses command line args.
@@ -70,8 +73,8 @@ args(int argc, char *argv[])
     switch (c) {
     case 'd':
       pdrop = atof(optarg);
-      if (pdrop > 0.0 && (pdrop > MAXPROB || pdrop < MINPROB)) {
-        fprintf(stderr, "%s: recommended drop probability between %f and %f.\n", argv[0], MINPROB, MAXPROB);
+      if (pdrop > 0.0 && (pdrop > NETIMG_MAXPROB || pdrop < NETIMG_MINPROB)) {
+        fprintf(stderr, "%s: recommended drop probability between %f and %f.\n", argv[0], NETIMG_MINPROB, NETIMG_MAXPROB);
       }
       break;
     default:
@@ -172,19 +175,9 @@ recvqry(int sd, iqry_t *iqry)
    * recvfrom() in local variable "bytes".
   */
   /* Lab5: YOUR CODE HERE */
-  /* DONE */ 
-  socklen_t addr_len = sizeof(client);
-  bytes = recvfrom(
-      sd,
-      (void *) iqry,
-      sizeof(*iqry),
-      0,
-      (struct sockaddr *) &client,
-      &addr_len 
-  );
-
+  
   if (bytes != sizeof(iqry_t)) {
-    return (NETIMG_ESIZE);
+    return(NETIMG_ESIZE);
   }
   if (iqry->iq_vers != NETIMG_VERS) {
     return(NETIMG_EVERS);
@@ -200,39 +193,46 @@ recvqry(int sd, iqry_t *iqry)
 }
   
 /* 
- * Lab5 Task 1:
  * sendpkt: sends the provided "pkt" of size "size"
- * to imgdb::client using sendto().
+ * to imgdb::client using sendto() and wait for an ACK packet.
+ * If ACK doesn't return before retransmission timeout,
+ * re-send the packet.  Keep on trying for NETIMG_MAXTRIES times.
  *
- * Returns the return value of sendto().
+ * Upon success, i.e., pkt sent without error and ACK returned,
+ * the ACK pkt is stored in the provided "ack" variable, which
+ * memory must have been allocated by caller and return the
+ * return value of sendto(). Otherwise, return 0 if ACK not
+ * received or if the received ACK packet is malformed.
  *
  * Nothing else is modified.
 */
 int imgdb::
-sendpkt(int sd, char *pkt, int size)
+sendpkt(int sd, char *pkt, int size, ihdr_t *ack)
 {
-  /* Lab5: YOUR CODE HERE */
-  /* DONE */
-  // update the return value to the correct value.
-  return sendto(
-      sd,
-      (void *) pkt,
-      size,
-      0,
-      (const struct sockaddr *) &client,
-      sizeof(client)
-  );
+  /* PA3 Task 2.1: sends the provided pkt to client as you did in
+   * Lab5.  In addition, initialize a struct timeval timeout variable
+   * to NETIMG_SLEEP sec and NETIMG_USLEEP usec and wait for read
+   * event on socket sd up to the timeout value.  If no read event
+   * occurs before the timeout, try sending the packet to client
+   * again.  Repeat NETIMG_MAXTRIES times.  If read event occurs
+   * before timeout, receive the incoming packet and make sure that it
+   * is an ACK pkt as expected.
+   */
+  /* PA3: YOUR CODE HERE */
+
+  return(0);
 }
 
 /*
  * sendimg:
- * Send the image contained in *image to the client
- * pointed to by *client. Send the image in
- * chunks of segsize, not to exceed mss, instead of
- * as one single image. With probability pdrop, drop
- * a segment instead of sending it.
- * Lab6: compute and send an accompanying FEC packet
- * for every "fwnd"-full of data.
+ * Send the image contained in *image to the client pointed to by
+ * *client. Send the image in chunks of segsize, not to exceed mss,
+ * instead of as one single image. With probability pdrop, drop a
+ * segment instead of sending it.  Lab6 and PA3: compute and send an
+ * accompanying FEC packet for every "fwnd"-full of data.
+ *
+ * PA3: If received malformed ACK to imsg, assume client has exited,
+ * and simply return to caller.
  *
  * Terminate process upon encountering any error.
  * Doesn't otherwise modify anything.
@@ -240,10 +240,9 @@ sendpkt(int sd, char *pkt, int size)
 void imgdb::
 sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 {
-  int bytes, segsize, datasize;
+  int bytes, datasize;
   char *ip;
-  long left;
-  unsigned int snd_next;
+  ihdr_t ack;
 
   /* Prepare imsg for transmission: fill in im_vers and convert
    * integers to network byte order before transmission.  Note that
@@ -256,23 +255,19 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
   imsg->im_format = htons(imsg->im_format);
 
   // send the imsg packet to client by calling sendpkt().
-  bytes = sendpkt(sd, (char *) imsg, sizeof(imsg_t));
-  net_assert((bytes != sizeof(imsg_t)), "imgdb::sendimg: send imsg");
+  bytes = sendpkt(sd, (char *) imsg, sizeof(imsg_t), &ack);
+  if ((bytes != sizeof(imsg_t)) || (ack.ih_seqn != NETIMG_SYNSEQ)) {
+    return;
+  }
 
   if (image) {
     ip = image; /* ip points to the start of image byte buffer */
     datasize = mss - sizeof(ihdr_t) - NETIMG_UDPIP;
-    snd_next = 0;
 
     /* Lab5 Task 1:
      * make sure that the send buffer is of size at least mss.
      */
     /* Lab5: YOUR CODE HERE */
-    /* DONE */
-    int sendbuff = mss;
-    socklen_t optlen = sizeof(sendbuff);
-    int result = setsockopt(sd, SOL_SOCKET, SO_SNDBUF, &sendbuff, optlen);
-    net_assert(result == -1, "imgdb::sendimg: failed to resize send buffer");
 
     /* Lab5 Task 1:
      *
@@ -283,127 +278,80 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
      * re-used for each chunk of data to be sent.
      */
     /* Lab5: YOUR CODE HERE */
-    /* DONE */
-    ihdr_t ihdr;
-    ihdr.ih_vers = NETIMG_VERS;
-    ihdr.ih_type = NETIMG_DATA;
 
-    struct iovec iovec_arr[NETIMG_NUMIOV];
-    iovec_arr[0].iov_base = (void *) &ihdr;
-    iovec_arr[0].iov_len = sizeof(ihdr);
-    
-    struct msghdr msg;
-    msg.msg_name = &client;
-    msg.msg_namelen = sizeof(client);
-    msg.msg_iov = iovec_arr;
-    msg.msg_iovlen = NETIMG_NUMIOV;
-    msg.msg_control = 0;
-    msg.msg_controllen = 0;
-    msg.msg_flags = 0;
-
-    unsigned char * fec_buff = new unsigned char[datasize];
-    unsigned int fec_seg_num = 0;
+    /* PA3 Task 2.2 and Task 4.1: initialize any necessary variables
+     * for your sender side sliding window and FEC window.
+     */
+    /* PA3: YOUR CODE HERE */
 
     do {
-      /* size of this segment */
-      left = imgsize - snd_next;
-      segsize = datasize > left ? left : datasize;
-      
-      /* Lab6 Task 1:
-       *
-       * If this is your first segment in an FEC window, use it to
-       * initialize your FEC data.  Subsequent segments within the FEC
-       * window should be XOR-ed with the content of your FEC data.
-       *
-       * You MUST use the two helper functions fec.cpp:fec_init()
-       * and fec.cpp:fec_accum() to encapsulate your FEC computation
-       * for the first and subsequent segments of the FEC window.
-       * You are to write these two functions.
-       *
-       * You need to figure out how to:
-       * 1. maintain your FEC window,
-       * 2. keep track of your progress over each FEC window, and
-       * 3. compute your FEC data across the multiple data segments.
+      /* PA3 Task 2.2: estimate the receiver's receive buffer based on packets
+       * that have been sent and ACKed, including outstanding FEC packet(s).
+       * We can only send as much as the receiver can buffer.
+       * It's an estimate, so it doesn't have to be exact, being off by
+       * one or two packets is fine.
        */
-      /* Lab6: YOUR CODE HERE */
-      if (!snd_next) {
-        // Initialize 'fec_buff' b/c this is the first segment we're sending
-        fec_init(fec_buff, (unsigned char *) image, datasize, segsize); 
-      } else {
-        // Accumulate 'image' into 'fec_buff'
-        fec_accum(fec_buff, (unsigned char *) image, datasize, segsize);
-      }
-      ++fec_seg_num;
+      /* PA3: YOUR CODE HERE */
       
-      /* probabilistically drop a segment */
-      if (((float) random())/INT_MAX < pdrop) {
-        fprintf(stderr, "imgdb_sendimg: DROPPED offset 0x%x, %d bytes\n",
-                snd_next, segsize);
-      } else { 
-        
-        /* Lab5 Task 1: 
-         * Send one segment of data of size segsize at each iteration.
-         * Point the second entry of the iovec to the correct offset
-         * from the start of the image.  Update the sequence number
-         * and size fields of the ihdr_t header to reflect the byte
-         * offset and size of the current chunk of data.  Send
-         * the segment off by calling sendmsg().
-         */
-        /* Lab5: YOUR CODE HERE */
-        /* DONE */
-        ihdr.ih_size = htons(segsize);
-        ihdr.ih_seqn = htonl(snd_next);
-        iovec_arr[1].iov_base = (void *) (ip + snd_next);
-        iovec_arr[1].iov_len = segsize;
-
-        net_assert(sendmsg(sd, &msg, 0) == -1, "Failed to send message");
-        
-        fprintf(stderr, "imgdb_sendimg: sent offset 0x%x, %d bytes\n",
-                snd_next, segsize);
-        
-      }
-      
-      snd_next += segsize;
-      
-      /* Lab6 Task 1
+      /* PA3 Task 2.2: Send one usable window-full of data to client
+       * using sendmsg() to send each segment as you did in Lab5.  As
+       * in Lab 5, you probabilistically drop a segment instead of
+       * sending it.  Basically, copy the code within the do{}while
+       * loop in imgdb::sendimg() from Lab 5 here, but put it within
+       * another loop such that a usable window-full of segments can
+       * be sent out using the Lab 5 code.  Don't forget to decrement
+       * your "usable" even if you drop a packet.
        *
-       * If one fwnd-full of fec has been accumulated or last chunk
-       *   of data has just been sent, send fec
+       * PA3 Task 4.1: Before you send out each segment, update your
+       * FEC variables and initialize or accumulate your FEC data
+       * packet by copying your Lab 6 code here appropriately.
        *
-       * Point the second entry of the iovec to your FEC data.
-       * The sequence number of the FEC packet MUST be the sequence
-       * number of the first image data byte beyond the FEC window.
-       * The size of an FEC packet MUST be "datasize".
-       * Don't forget to use network byte order.
-       * Send the FEC packet off by calling sendmsg().
-       *
-       * After you've sent off your FEC packet, you may want to
-       * reset your FEC-window related variables to prepare for the
-       * processing of the next window.  If you re-use the same header
-       * for sending image data and FEC data, make sure you reset the
-       * ih_type field of the header also.
+       * PA3 Task 4.1: After you send out each segment, if you have
+       * accumulated an FEC window full of segments or the last
+       * segment has been sent, send your FEC data.  Again, copy your
+       * Lab 6 code here to the appropriate place.  You should also
+       * probabilistically drop your FEC data.  Don't forget
+       * to decrement your "usable" regardless of whether your FEC
+       * data is dropped.
        */
-      /* Lab6: YOUR CODE HERE */
-      if (fec_seg_num == this->fwnd || (int) snd_next < imgsize) {
-        fec_seg_num = 0;
-        
-        // Prepare for FEC send
-        ihdr.ih_type = NETIMG_FEC;
-        ihdr.ih_size = htonl(datasize);
-        ihdr.ih_seqn = htonl(snd_next);
-
-        iovec_arr[1].iov_base = (void *) fec_buff;
-        iovec_arr[1].iov_len = datasize;
-
-        // Prepare for DATA send
-        ihdr.ih_type = NETIMG_DATA;
-      }
+      /* PA3: YOUR CODE HERE */
       
-    } while ((int) snd_next < imgsize);
-  
-    delete[] fec_buff;
+      /* PA3 Task 2.2: Next wait for ACKs for up to NETIMG_SLEEP secs
+         and NETIMG_USLEEp usec. */
+      /* PA3: YOUR CODE HERE */
+      
+      /* PA3 Task 2.2: If an ACK arrived, grab it off the network and slide
+       * our window forward when possible. Continue to do so for all the
+       * ACKs that have arrived.  Remember that we're using cumulative ACK.
+       *
+       * We have a blocking socket, but here we want to
+       * opportunistically grab all the ACKs that have arrived but not
+       * wait for the ones that have not arrived.  So, when we call
+       * receive, we want the socket to be non-blocking.  However,
+       * instead of setting the socket to non-blocking and then set it
+       * back to blocking again, we simply set flags=MSG_DONTWAIT when
+       * calling the receive function.
+       */
+      /* PA3: YOUR CODE HERE */
+      
+      /* PA3 Task 2.2: If no ACK returned up to the timeout time,
+       * trigger Go-Back-N and re-send all segments starting from the
+       * last unACKed segment.
+       *
+       * PA3 Task 4.1: If you experience RTO, reset your FEC window to
+       * start at the segment to be retransmitted.
+       */
+      /* PA3: YOUR CODE HERE */
+    } while (1); // PA3 Task 2.2: replace the '1' with your condition for detecting 
+    // that all segments sent have been acknowledged
+    
+    /* PA3 Task 2.2: after the image is sent send a NETIMG_FIN packet
+     * and wait for ACK, using imgdb::sendpkt().
+     */
+    /* PA3: YOUR CODE HERE */
   }
     
+  return;
 }
 
 /*
@@ -418,10 +366,7 @@ handleqry()
   double imgdsize;
 
   imsg.im_type = recvqry(sd, &iqry);
-  if (imsg.im_type) {
-    sendimg(sd, &imsg, NULL, 0, 0);
-  } else {
-    
+  if (!imsg.im_type) {
     imsg.im_type = readimg(iqry.iq_name, 1);
     
     if (imsg.im_type == NETIMG_FOUND) {
@@ -440,6 +385,7 @@ handleqry()
       sendimg(sd, &imsg, NULL, 0, 0);
     }
   }
+  // else ignore bad iqry packet
 
   return;
 }

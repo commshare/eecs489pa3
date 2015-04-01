@@ -39,17 +39,21 @@
 #define NETIMG_NUMIOV      2
 
 #define NETIMG_MAXWIN    255   // 2^8 -1
+#define NETIMG_MINWIN      4
 #define NETIMG_RCVWIN     12
-#define NETIMG_FECWIN     11
+#define NETIMG_FECWIN     11   // Lab6 & PA2
 #define NETIMG_UDPIP      28   // 20 bytes IP, 8 bytes UDP headers
 #define NETIMG_MSS     10276   // 10KB segments, corresponds to
                                // SO_SNDBUF/SO_RCVBUF so including
                                // the 36-byte headers (ihdr_t+UDP+IP)
 #define NETIMG_MINSS      40   // 36 bytes headers, 4 bytes data
-#define NETIMG_PDROP   0.021   // recommended between 0.011 and 0.11,
-                               // -1.0 to turn off, values larger
-                               // than 0.11 to simulate massive drops
-#define NETIMG_SLEEP       0   // secs, set to 20 or larger for X11
+#define NETIMG_MINPROB 0.011
+#define NETIMG_MAXPROB 0.11
+#define NETIMG_PDROP   0.021   // recommended between NETIMG_MINPROB and 
+                               // NETIMG_MAXPROB, values larger than 
+                               // NETIMG_MAXPROB simulates massive drops
+                               // -1.0 to turn off
+#define NETIMG_SLEEP       1   // secs, set to 20 or larger for X11
                                // forwarding on CAEN over ADSL, to
                                // prevent unnecessary retransmissions
 #define NETIMG_USLEEP 500000   // 500 ms
@@ -71,12 +75,12 @@
 #define NETIMG_EBUSY   0x0d
 
 #define NETIMG_DATA    0x20
-#define NETIMG_FEC     0x60    // PA3
+#define NETIMG_FEC     0x60    // Lab6 & PA3
 #define NETIMG_FIN     0xa0    // PA3
 
 // special seqno's for PA3:
 #define NETIMG_MAXSEQ  2147483647 // 2^31-1
-#define NETIMG_DIMSEQ  4294967295 // 2^32-1
+#define NETIMG_SYNSEQ  4294967294 // 2^32-1
 #define NETIMG_FINSEQ  4294967294 // 2^32-2
 
 typedef struct {                  // NETIMG_SYNQRY
