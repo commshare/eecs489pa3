@@ -197,6 +197,23 @@ netimg_recvimsg()
     net_assert((imgdsize > (double) LONG_MAX), 
                "netimg_recvimsg: image too big");
     img_size = (long) imgdsize;                 // global
+
+    /* PA3 Task 2.1:
+     *
+     * Send back an ACK with ih_type = NETIMG_ACK and ih_seqn =
+     * NETIMG_SYNSEQ.  Initialize any variable necessary to keep track
+     * of ACKs.
+     *
+     * TODO: initialize variables to track ACKs
+     */
+    /* PA3: YOUR CODE HERE */
+    ihdr_t ih;
+    ih.ih_vers = NETIMG_VERS;
+    ih.ih_type = NETIMG_ACK;
+    ih.ih_seqn = htonl(NETIMG_SYNSEQ);
+
+    int ack_result = send(sd, (void *) &ih, sizeof(ihdr_t), 0);
+    net_assert(ack_result == -1, "netimg_recvimsg() network error while sending NETIMG_ACK back to server\n");
   }
 
   return((char) imsg.im_type);

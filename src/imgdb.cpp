@@ -200,28 +200,94 @@ recvqry(int sd, iqry_t *iqry)
 }
   
 /* 
- * Lab5 Task 1:
  * sendpkt: sends the provided "pkt" of size "size"
- * to imgdb::client using sendto().
+ * to imgdb::client using sendto() and wait for an ACK packet.
+ * If ACK doesn't return before retransmission timeout,
+ * re-send the packet.  Keep on trying for NETIMG_MAXTRIES times.
  *
- * Returns the return value of sendto().
+ * Upon success, i.e., pkt sent without error and ACK returned,
+ * the ACK pkt is stored in the provided "ack" variable, which
+ * memory must have been allocated by caller and return the
+ * return value of sendto(). Otherwise, return 0 if ACK not
+ * received or if the received ACK packet is malformed.
  *
  * Nothing else is modified.
 */
 int imgdb::
-sendpkt(int sd, char *pkt, int size)
+sendpkt(int sd, char *pkt, int size, ihdr_t *ack)
 {
-  /* Lab5: YOUR CODE HERE */
-  /* DONE */
-  // update the return value to the correct value.
-  return sendto(
-      sd,
-      (void *) pkt,
-      size,
-      0,
-      (const struct sockaddr *) &client,
-      sizeof(client)
-  );
+  /* PA3 Task 2.1: sends the provided pkt to client as you did in
+   * Lab5.  In addition, initialize a struct timeval timeout variable
+   * to NETIMG_SLEEP sec and NETIMG_USLEEP usec and wait for read
+   * event on socket sd up to the timeout value.  If no read event
+   * occurs before the timeout, try sending the packet to client
+   * again.  Repeat NETIMG_MAXTRIES times.  If read event occurs
+   * before timeout, receive the incoming packet and make sure that it
+   * is an ACK pkt as expected.
+   */
+  /* PA3: YOUR CODE HERE */
+
+  unsigned int i = 0;
+
+  do {
+    // Send 'pkt' to client
+    int client_size = sizeof(client);
+
+    sendto(
+        sd,
+        (void *) pkt,
+        size,
+        0,
+        (const struct sockaddr *) &client,
+        client_size 
+    );
+   
+    // Wait for acknowledgement
+    int max_fd = sd;
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(sd, &fds);
+
+    struct timeval tv = {NETIMG_SLEEP, NETIMG_USLEEP};
+
+    int select_result = select(
+        max_fd + 1,
+        &fds,
+        NULL,
+        NULL,
+        &tv
+    ); 
+
+    net_assert(select_result == -1, "imgdb::sendpkt() network error while waiting for ACK\n");
+
+    // Check for valid traffic
+    if (select_result) {
+      // Attempt to read ihdr_t 'ack'
+      int recvfrom_result = recvfrom(
+          sd,
+          (void *) ack,
+          sizeof(ihdr_t),
+          0,
+          (struct sockaddr *) &client,
+          (socklen_t *) &client_size 
+      );
+
+      net_assert(recvfrom_result == -1, "imgdb::sendpkt() network error while reading NETIMG_ACK packet\n");
+      net_assert(ack->ih_type == NETIMG_ACK, "imgdb::sendpkt() received packet with unknown type when waiting for NETIMG_ACK packet\n");
+
+      // Convert packet fields to host-byte-order
+      ack->ih_size = ntohs(ack->ih_size);
+      ack->ih_seqn = ntohl(ack->ih_seqn);
+
+      return 0;
+    } 
+    
+    // else, timeout (for which we either try again or stop if 
+    // we've exhausted our attempts)
+    
+  } while (++i < NETIMG_MAXTRIES);
+
+  return -1;
 }
 
 /*
@@ -244,6 +310,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
   char *ip;
   long left;
   unsigned int snd_next;
+  ihdr_t ack;
 
   /* Prepare imsg for transmission: fill in im_vers and convert
    * integers to network byte order before transmission.  Note that
@@ -256,8 +323,10 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
   imsg->im_format = htons(imsg->im_format);
 
   // send the imsg packet to client by calling sendpkt().
-  bytes = sendpkt(sd, (char *) imsg, sizeof(imsg_t));
-  net_assert((bytes != sizeof(imsg_t)), "imgdb::sendimg: send imsg");
+  bytes = sendpkt(sd, (char *) imsg, sizeof(imsg_t), &ack);
+  if ((bytes != sizeof(imsg_t)) || (ack.ih_seqn != NETIMG_SYNSEQ)) {
+    return;
+  }
 
   if (image) {
     ip = image; /* ip points to the start of image byte buffer */
