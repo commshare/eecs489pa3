@@ -59,6 +59,7 @@ unsigned int missingSeqNo_;
 unsigned int numFecSegs_ = 0;
 unsigned int currFecSeqNo_ = 0;
 unsigned int bytesReceived_ = 0;
+bool reqFinished_ = false;
 
 /*
  * netimg_args: parses command line args.
@@ -155,6 +156,8 @@ netimg_args(int argc, char *argv[], char **sname, u_short *port, char **imgname)
 int
 netimg_sendqry(char *imgname)
 {
+
+  fprintf(stderr, " - Sending query\n");
   int bytes;
   iqry_t iqry;
 
@@ -241,6 +244,11 @@ netimg_recvimsg()
 void
 netimg_recvimg(void)
 {
+
+  if (reqFinished_) {
+    return;
+  }
+
   ihdr_t hdr;  // memory to hold packet header
    
   /* 
@@ -406,30 +414,30 @@ netimg_recvimg(void)
       bytesReceived_ += size;
       fprintf(stderr, "-- nextSeqNo_: 0x%x, missingSeqNo_: 0x%x, currFecSeqNo_: 0x%x, numFecSegs_: %u\n",
           nextSeqNo_, missingSeqNo_, currFecSeqNo_, numFecSegs_);
-    }
     
-    /* PA3 Task 2.3: If the incoming data packet carries the expected
-     * sequence number, update our expected sequence number.  In all
-     * cases, prepare to send back an ACK packet with the next
-     * expected sequence number, to ensure that the sender knows what
-     * our current expectation is.
-     */
-    /* PA3: YOUR CODE HERE */
-    ihdr_t ack = {
-        NETIMG_VERS,
-        NETIMG_ACK,
-        0,
-        htonl(nextSeqNo_)
-    };
-    
-    // Probabilistically send FIN-ACK
-    if (((float) random())/INT_MAX < pdrop) {
-      // Report dropped ACK 
-      fprintf(stderr, "imgdb_sendimg: DROPPED ACK seqn: 0x%x\n", nextSeqNo_);
+      /* PA3 Task 2.3: If the incoming data packet carries the expected
+       * sequence number, update our expected sequence number.  In all
+       * cases, prepare to send back an ACK packet with the next
+       * expected sequence number, to ensure that the sender knows what
+       * our current expectation is.
+       */
+      /* PA3: YOUR CODE HERE */
+      ihdr_t ack = {
+          NETIMG_VERS,
+          NETIMG_ACK,
+          0,
+          htonl(nextSeqNo_)
+      };
+      
+      // Probabilistically send ACK
+      if (((float) random())/INT_MAX < pdrop) {
+        // Report dropped ACK 
+        fprintf(stderr, "imgdb_sendimg: DROPPED ACK seqn: 0x%x\n", nextSeqNo_);
 
-    } else { /* send segment */
-      int ack_result = send(sd, (void *) &ack, sizeof(ihdr_t), 0);
-      net_assert(ack_result == -1, "netimg_recvimg() failed to send ACK packet to server\n");
+      } else { /* send segment */
+        int ack_result = send(sd, (void *) &ack, sizeof(ihdr_t), 0);
+        net_assert(ack_result == -1, "netimg_recvimg() failed to send ACK packet to server\n");
+      }
     }
     
   } else if (hdr.ih_type == NETIMG_FEC) { // FEC pkt
@@ -547,12 +555,18 @@ netimg_recvimg(void)
     delete[] fec_buff;
   
   } else if (hdr.ih_type == NETIMG_FIN) { /* NETIMG_FIN */
+
+    int fin_result = recv(sd, (void *) &hdr, sizeof(hdr), 0);
+    net_assert(fin_result == -1, "netimg_recvimg() failed to read NETIMG_FIN packet off of wire.\n");
+
+    fprintf(stderr, "netimg_recvimg: received NETIMG_FIN\n");
+    
     // Create FIN ACK packet
     ihdr_t fin_ack = {
-      NETIMG_VERS,
-      NETIMG_ACK,
-      0,
-      htonl(NETIMG_FINSEQ)
+        NETIMG_VERS,
+        NETIMG_ACK,
+        0,
+        htonl(NETIMG_FINSEQ)
     };
 
     // Probabilistically send FIN-ACK
@@ -564,6 +578,8 @@ netimg_recvimg(void)
       int fin_ack_result = send(sd, (void *) &fin_ack, sizeof(ihdr_t), 0);
       net_assert(fin_ack_result == -1, "netimg_recvimg() failed to send FIN ACK packet to server\n");
     }
+
+    //reqFinished_ = true;
   
   } else { /* error */
     net_assert(0, "netimg_recvimg() invalid type received in packet header\n");
