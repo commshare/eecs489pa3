@@ -509,7 +509,7 @@ netimg_recvimg(void)
 
     // Check if we've received the correct FEC pkt and that we should
     // reconstruct a single missing pkt
-    if (seqn == nextSeqNo_ && numFecSegs_ == fwnd - 1) {
+    if (seqn == nextSeqNo_ && numFecSegs_ == (unsigned int)(fwnd - 1)) {
       unsigned int last_segment_seqno = img_size - (img_size % datasize);
       // Use simple XOR magic to recover the missing packet
       for (unsigned int i = currFecSeqNo_; i < seqn; i += datasize) {

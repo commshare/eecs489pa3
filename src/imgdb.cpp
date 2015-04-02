@@ -38,6 +38,8 @@ using namespace std;
 #include <GL/gl.h>
 #endif
 
+#include <errno.h>
+
 #include "ltga.h"
 #include "socks.h"
 #include "netimg.h"
@@ -456,7 +458,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           // read more ACKs in non-blocking fashion
           socklen_t addr_len = sizeof(client);
           ihdr_t ack; 
-          unsigned int initial_ack_result = recvfrom(
+          int ack_result = recvfrom(
               sd,
               (void *) &ack,
               sizeof(ihdr_t),
@@ -465,7 +467,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
               &addr_len
           );
 
-          if (initial_ack_result == -1) {
+          if (ack_result == -1) {
             // Fail due to network error when reading ACKs opportunistically
             net_assert(
                 errno != EAGAIN && errno != EWOULDBLOCK,
