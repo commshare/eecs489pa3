@@ -50,6 +50,8 @@ using namespace std;
 #include "imgdb.h"
 #include "fec.h"
 
+#include <bitset>
+
 /*
  * imgdb_args: parses command line args.
  *

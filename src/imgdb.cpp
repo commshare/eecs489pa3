@@ -306,12 +306,7 @@ sendpkt(int sd, char *pkt, int size, ihdr_t *ack)
 void imgdb::
 sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 {
-  int bytes, segsize, datasize;
-  char *ip;
-  long left;
-  unsigned int snd_next;
-  ihdr_t ack;
-
+  /// Send header for image packet ////
   /* Prepare imsg for transmission: fill in im_vers and convert
    * integers to network byte order before transmission.  Note that
    * im_type is set by the caller and should not be modified.  Send
@@ -322,17 +317,18 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
   imsg->im_height = htons(imsg->im_height);
   imsg->im_format = htons(imsg->im_format);
 
-  // send the imsg packet to client by calling sendpkt().
-  bytes = sendpkt(sd, (char *) imsg, sizeof(imsg_t), &ack);
+  // Send the imsg packet to client by calling sendpkt().
+  ihdr_t ack;
+  int bytes = sendpkt(sd, (char *) imsg, sizeof(imsg_t), &ack);
   if ((bytes != sizeof(imsg_t)) || (ack.ih_seqn != NETIMG_SYNSEQ)) {
     return;
   }
 
+  //// Send image data ////
   if (image) {
-    ip = image; /* ip points to the start of image byte buffer */
-    datasize = mss - sizeof(ihdr_t) - NETIMG_UDPIP;
-    snd_next = 0;
-
+    char *ip = image; /* ip points to the start of image byte buffer */
+    unsigned int datasize = mss - sizeof(ihdr_t) - NETIMG_UDPIP;
+    
     /* Lab5 Task 1:
      * make sure that the send buffer is of size at least mss.
      */
@@ -370,109 +366,155 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
     msg.msg_controllen = 0;
     msg.msg_flags = 0;
 
-    unsigned char * fec_buff = new unsigned char[datasize];
-    unsigned int fec_seg_num = 0;
+    /* PA3 Task 2.2 and Task 4.1: initialize any necessary variables
+     * for your sender side sliding window and FEC window.
+     */
+    /* PA3: YOUR CODE HERE */
+    unsigned int snd_una = 0;
+    unsigned int snd_next = 0;
+    unsigned int window = this->rwnd;
 
     do {
-      /* size of this segment */
-      left = imgsize - snd_next;
-      segsize = datasize > left ? left : datasize;
-      
-      /* Lab6 Task 1:
-       *
-       * If this is your first segment in an FEC window, use it to
-       * initialize your FEC data.  Subsequent segments within the FEC
-       * window should be XOR-ed with the content of your FEC data.
-       *
-       * You MUST use the two helper functions fec.cpp:fec_init()
-       * and fec.cpp:fec_accum() to encapsulate your FEC computation
-       * for the first and subsequent segments of the FEC window.
-       * You are to write these two functions.
-       *
-       * You need to figure out how to:
-       * 1. maintain your FEC window,
-       * 2. keep track of your progress over each FEC window, and
-       * 3. compute your FEC data across the multiple data segments.
+      /* PA3 Task 2.2: estimate the receiver's receive buffer based on packets
+       * that have been sent and ACKed, including outstanding FEC packet(s).
+       * We can only send as much as the receiver can buffer.
+       * It's an estimate, so it doesn't have to be exact, being off by
+       * one or two packets is fine.
        */
-      /* Lab6: YOUR CODE HERE */
-      if (!snd_next) {
-        // Initialize 'fec_buff' b/c this is the first segment we're sending
-        fec_init(fec_buff, (unsigned char *) image, datasize, segsize); 
-      } else {
-        // Accumulate 'image' into 'fec_buff'
-        fec_accum(fec_buff, (unsigned char *) image, datasize, segsize);
-      }
-      ++fec_seg_num;
+      /* PA3: YOUR CODE HERE */
+      unsigned int snd_limit = snd_una + window; /* usable window */
       
-      /* probabilistically drop a segment */
-      if (((float) random())/INT_MAX < pdrop) {
-        fprintf(stderr, "imgdb_sendimg: DROPPED offset 0x%x, %d bytes\n",
-                snd_next, segsize);
-      } else { 
-        
-        /* Lab5 Task 1: 
-         * Send one segment of data of size segsize at each iteration.
-         * Point the second entry of the iovec to the correct offset
-         * from the start of the image.  Update the sequence number
-         * and size fields of the ihdr_t header to reflect the byte
-         * offset and size of the current chunk of data.  Send
-         * the segment off by calling sendmsg().
-         */
-        /* Lab5: YOUR CODE HERE */
-        /* DONE */
-        ihdr.ih_size = htons(segsize);
-        ihdr.ih_seqn = htonl(snd_next);
-        iovec_arr[1].iov_base = (void *) (ip + snd_next);
-        iovec_arr[1].iov_len = segsize;
+      // Send a usable-window-full of packets
+      while (snd_next < snd_limit) {
+        // Compute segment dimensions
+        unsigned int seqno = snd_next * datasize;
+        unsigned int segsize = (imgsize - seqno < datasize)
+            ? imgsize - seqno
+            : datasize;
 
-        net_assert(sendmsg(sd, &msg, 0) == -1, "Failed to send message");
-        
-        fprintf(stderr, "imgdb_sendimg: sent offset 0x%x, %d bytes\n",
-                snd_next, segsize);
-        
-      }
-      
-      snd_next += segsize;
-      
-      /* Lab6 Task 1
-       *
-       * If one fwnd-full of fec has been accumulated or last chunk
-       *   of data has just been sent, send fec
-       *
-       * Point the second entry of the iovec to your FEC data.
-       * The sequence number of the FEC packet MUST be the sequence
-       * number of the first image data byte beyond the FEC window.
-       * The size of an FEC packet MUST be "datasize".
-       * Don't forget to use network byte order.
-       * Send the FEC packet off by calling sendmsg().
-       *
-       * After you've sent off your FEC packet, you may want to
-       * reset your FEC-window related variables to prepare for the
-       * processing of the next window.  If you re-use the same header
-       * for sending image data and FEC data, make sure you reset the
-       * ih_type field of the header also.
-       */
-      /* Lab6: YOUR CODE HERE */
-      if (fec_seg_num == this->fwnd || (int) snd_next < imgsize) {
-        fec_seg_num = 0;
-        
-        // Prepare for FEC send
-        ihdr.ih_type = NETIMG_FEC;
-        ihdr.ih_size = htonl(datasize);
-        ihdr.ih_seqn = htonl(snd_next);
+        // Probabilistically drop segment
+        if (((float) random())/INT_MAX < pdrop) {
+          // Report dropped segment
+          fprintf(stderr, "imgdb_sendimg: DROPPED offset 0x%x, %d bytes\n",
+                  seqno, segsize);
 
-        iovec_arr[1].iov_base = (void *) fec_buff;
-        iovec_arr[1].iov_len = datasize;
+        } else { /* send segment */
+          /* Lab5 Task 1: 
+           * Send one segment of data of size segsize at each iteration.
+           * Point the second entry of the iovec to the correct offset
+           * from the start of the image.  Update the sequence number
+           * and size fields of the ihdr_t header to reflect the byte
+           * offset and size of the current chunk of data.  Send
+           * the segment off by calling sendmsg().
+           */
+          /* Lab5: YOUR CODE HERE */
+          /* DONE */
+          ihdr.ih_size = htons(segsize);
+          ihdr.ih_seqn = htonl(seqno);
+          iovec_arr[1].iov_base = (void *) (ip + seqno);
+          iovec_arr[1].iov_len = segsize;
 
-        // Prepare for DATA send
-        ihdr.ih_type = NETIMG_DATA;
+          // Fail due to bad segment send
+          net_assert(sendmsg(sd, &msg, 0) == -1, "imgdb::sendimg() Failed to send message");
+         
+          // Report segment send
+          fprintf(stderr, "imgdb_sendimg: sent offset 0x%x, %d bytes\n",
+                  snd_next, segsize);
+        }
+
+        ++snd_next;
       }
-      
-    } while ((int) snd_next < imgsize);
-  
-    delete[] fec_buff;
+
+      // Await ACKS from receiver w/timeout
+      int max_fd = sd;
+      fd_set fds;
+      FD_ZERO(&fds);
+      FD_SET(sd, &fds);
+
+      struct timeval tv = {NETIMG_SLEEP, NETIMG_USLEEP};
+
+      int select_result = select(
+          max_fd + 1,
+          &fds,
+          NULL,
+          NULL,
+          &tv
+      );
+
+      // Fail due to network error while waiting for ACKs
+      net_assert(
+          select_result == -1,
+          "imgdb::sendimg() network error while waiting for ACK\n"
+      );
+
+      // Process ACK traffic
+      if (select_result) { 
+        // We've received traffic! =>  Optimistically receive all ACKs and update window
+        bool more_acks = true;
+        
+        do {
+          // read more ACKs in non-blocking fashion
+          socklen_t addr_len = sizeof(client);
+          ihdr_t ack; 
+          unsigned int initial_ack_result = recvfrom(
+              sd,
+              (void *) &ack,
+              sizeof(ihdr_t),
+              MSG_DONTWAIT,
+              (struct sockaddr *) &client,
+              &addr_len
+          );
+
+          if (initial_ack_result == -1) {
+            // Fail due to network error when reading ACKs opportunistically
+            net_assert(
+                errno != EAGAIN && errno != EWOULDBLOCK,
+                "imgdb::sendimg() encountered error while opportunistically reading ACKs\n"
+            );  
+
+            // We've read all of the ACKs
+            more_acks = false;
+          
+          } else { /* We've received an ACK, process it */
+            // Fail due to invalid vers 
+            net_assert(
+                ack.ih_vers != NETIMG_VERS,
+                "imgdb::sendimg() encountered packet with invalid vers while waiting for ACK\n"
+            );
+
+            // Fail due to invalid type
+            net_assert(
+                ack.ih_type != NETIMG_ACK,
+                "imgdb::sendimg() encountered packet with invalid type while waiting for ACK\n"
+            );
+
+            // Advance sliding window, if ACK acknowledges new segments
+            unsigned int ack_seqn = ntohl(ack.ih_seqn);
+
+            if (ack_seqn > snd_una) {
+              snd_una = ack_seqn / datasize; 
+            }
+          }
+        } while (more_acks);
+
+      } else { /* We haven't received any traffic => RTO! */
+        // Retransmit an entire window-full of segments starting at 'snd_una'
+        snd_next = snd_una; 
+      }
+
+    } while (snd_una < this->fwnd); // iterate until we've acknowledged all pkts
+
+    // Send NETIMG_FIN packet
+    ihdr_t fin = {
+        NETIMG_VERS,
+        NETIMG_FIN,
+        0,
+        htonl(NETIMG_FINSEQ)
+    };
+    ihdr_t ack;
+    this->sendpkt(sd, (char *) &fin, sizeof(ihdr_t), &ack);
+
   }
-    
 }
 
 /*

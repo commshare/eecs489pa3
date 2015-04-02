@@ -52,6 +52,7 @@ unsigned char *image;
 unsigned short mss;       // receiver's maximum segment size, in bytes
 unsigned char rwnd;       // receiver's window, in packets, of size <= mss
 unsigned char fwnd;       // Lab6: receiver's FEC window < rwnd, in packets
+float pdrop;
 
 unsigned int nextSeqNo_ = 0;
 unsigned int missingSeqNo_;
@@ -66,8 +67,8 @@ unsigned int bytesReceived_ = 0;
  * "*sname" points to the server's name, and "port" points to the port
  * to connect at server, in network byte order.  Both "*sname", and
  * "port" must be allocated by caller.  The variable "*imgname" points
- * to the name of the image to search for.  The global variables mss
- * and rwnd are initialized.
+ * to the name of the image to search for.  The global variables mss,
+ * rwnd, and pdrop are initialized.
  *
  * Nothing else is modified.
  */
@@ -82,10 +83,11 @@ netimg_args(int argc, char *argv[], char **sname, u_short *port, char **imgname)
     return (1);
   }
   
+  pdrop = NETIMG_PDROP;
   rwnd = NETIMG_RCVWIN;
   mss = NETIMG_MSS;
 
-  while ((c = getopt(argc, argv, "s:q:w:m:")) != EOF) {
+  while ((c = getopt(argc, argv, "s:q:w:m:d:")) != EOF) {
     switch (c) {
     case 's':
       for (p = optarg+strlen(optarg)-1;  // point to last character of
@@ -109,17 +111,24 @@ netimg_args(int argc, char *argv[], char **sname, u_short *port, char **imgname)
       break;
     case 'w':
       arg = atoi(optarg);
-      if (arg < 1 || arg > NETIMG_MAXWIN) {
+      if (arg < NETIMG_MINWIN || arg > NETIMG_MAXWIN) {
         return(1);
       }
       rwnd = (unsigned char) arg; 
       break;
     case 'm':
       arg = atoi(optarg);
-      if (arg < NETIMG_MINSS) {
+      if (arg < NETIMG_MINSS || arg > NETIMG_MSS) {
         return(1);
       }
       mss = (unsigned short) arg;
+      break;
+    case 'd':
+      pdrop = atof(optarg);  // global
+      if (pdrop > 0.0 && (pdrop > NETIMG_MAXPROB || pdrop < NETIMG_MINPROB)) {
+        fprintf(stderr, "%s: recommended drop probability between %f and %f.\n",
+                argv[0], NETIMG_MINPROB, NETIMG_MAXPROB);
+      }
       break;
     default:
       return(1);
@@ -129,6 +138,7 @@ netimg_args(int argc, char *argv[], char **sname, u_short *port, char **imgname)
 
   return (0);
 }
+
 
 /*
  * netimg_sendqry: send a query for provided imgname to
@@ -397,9 +407,32 @@ netimg_recvimg(void)
       fprintf(stderr, "-- nextSeqNo_: 0x%x, missingSeqNo_: 0x%x, currFecSeqNo_: 0x%x, numFecSegs_: %u\n",
           nextSeqNo_, missingSeqNo_, currFecSeqNo_, numFecSegs_);
     }
+    
+    /* PA3 Task 2.3: If the incoming data packet carries the expected
+     * sequence number, update our expected sequence number.  In all
+     * cases, prepare to send back an ACK packet with the next
+     * expected sequence number, to ensure that the sender knows what
+     * our current expectation is.
+     */
+    /* PA3: YOUR CODE HERE */
+    ihdr_t ack = {
+        NETIMG_VERS,
+        NETIMG_ACK,
+        0,
+        htonl(nextSeqNo_)
+    };
+    
+    // Probabilistically send FIN-ACK
+    if (((float) random())/INT_MAX < pdrop) {
+      // Report dropped ACK 
+      fprintf(stderr, "imgdb_sendimg: DROPPED ACK seqn: 0x%x\n", nextSeqNo_);
 
-
-  } else { // FEC pkt
+    } else { /* send segment */
+      int ack_result = send(sd, (void *) &ack, sizeof(ihdr_t), 0);
+      net_assert(ack_result == -1, "netimg_recvimg() failed to send ACK packet to server\n");
+    }
+    
+  } else if (hdr.ih_type == NETIMG_FEC) { // FEC pkt
     /* Lab6 Task 2
      *
      * Re-use the same struct msghdr above to receive an FEC packet.
@@ -512,6 +545,28 @@ netimg_recvimg(void)
         numFecSegs_, nextSeqNo_, currFecSeqNo_);
 
     delete[] fec_buff;
+  
+  } else if (hdr.ih_type == NETIMG_FIN) { /* NETIMG_FIN */
+    // Create FIN ACK packet
+    ihdr_t fin_ack = {
+      NETIMG_VERS,
+      NETIMG_ACK,
+      0,
+      htonl(NETIMG_FINSEQ)
+    };
+
+    // Probabilistically send FIN-ACK
+    if (((float) random())/INT_MAX < pdrop) {
+      // Report dropped ACK 
+      fprintf(stderr, "imgdb_sendimg: DROPPED ACK seqn: %s\n", "NETIMG_FINSEQ");
+
+    } else { /* send segment */
+      int fin_ack_result = send(sd, (void *) &fin_ack, sizeof(ihdr_t), 0);
+      net_assert(fin_ack_result == -1, "netimg_recvimg() failed to send FIN ACK packet to server\n");
+    }
+  
+  } else { /* error */
+    net_assert(0, "netimg_recvimg() invalid type received in packet header\n");
   }
   
   /* give the updated image to OpenGL for texturing */
