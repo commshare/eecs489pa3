@@ -391,6 +391,11 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
     unsigned int window = this->rwnd;
     unsigned int max_segment = imgsize / datasize;
 
+    unsigned char * fec_buff = new unsigned char[datasize];
+    unsigned int fec_window_start = 0;
+    unsigned int num_fec_sent = 0;
+    unsigned int num_fec_acked = 0;
+
     do {
 
       /* PA3 Task 2.2: estimate the receiver's receive buffer based on packets
@@ -400,7 +405,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
        * one or two packets is fine.
        */
       /* PA3: YOUR CODE HERE */
-      unsigned int window_limit = snd_una + window; /* usable window */
+      unsigned int window_limit = snd_una + window - (num_fec_sent - num_fec_acked); /* usable window */
       unsigned int snd_limit = (window_limit < max_segment)
           ? window_limit
           : max_segment;
@@ -424,10 +429,35 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             ? imgsize - seqno
             : datasize;
 
+        /* Lab6 Task 1:
+         *
+         * If this is your first segment in an FEC window, use it to
+         * initialize your FEC data.  Subsequent segments within the FEC
+         * window should be XOR-ed with the content of your FEC data.
+         *
+         * You MUST use the two helper functions fec.cpp:fec_init()
+         * and fec.cpp:fec_accum() to encapsulate your FEC computation
+         * for the first and subsequent segments of the FEC window.
+         * You are to write these two functions.
+         *
+         * You need to figure out how to:
+         * 1. maintain your FEC window,
+         * 2. keep track of your progress over each FEC window, and
+         * 3. compute your FEC data across the multiple data segments.
+         */
+        /* Lab6: YOUR CODE HERE */
+        if ((snd_next - fec_window_start) % fwnd) {
+          // This is not the first segment in the FEC window, so accumulate 'image' into 'fec_buff'
+          fec_accum(fec_buff, (unsigned char *) image + seqno, datasize, segsize);
+        } else {
+          // Initialize 'fec_buff' b/c this is the first segment we're sending
+          fec_init(fec_buff, (unsigned char *) image + seqno, datasize, segsize); 
+        }
+
         // Probabilistically drop segment
         if (((float) random())/INT_MAX < pdrop) {
           // Report dropped segment
-          fprintf(stderr, "imgdb_sendimg: DROPPED offset 0x%x, %d bytes\n",
+          fprintf(stderr, "imgdb_sendimg: DROPPED DATA packet with offset 0x%x, %d bytes\n",
                   seqno, segsize);
 
         } else { /* send segment */
@@ -456,6 +486,54 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         }
 
         ++snd_next;
+      
+        /* Lab6 Task 1
+         *
+         * If one fwnd-full of fec has been accumulated or last chunk
+         *   of data has just been sent, send fec
+         *
+         * Point the second entry of the iovec to your FEC data.
+         * The sequence number of the FEC packet MUST be the sequence
+         * number of the first image data byte beyond the FEC window.
+         * The size of an FEC packet MUST be "datasize".
+         * Don't forget to use network byte order.
+         * Send the FEC packet off by calling sendmsg().
+         *
+         * After you've sent off your FEC packet, you may want to
+         * reset your FEC-window related variables to prepare for the
+         * processing of the next window.  If you re-use the same header
+         * for sending image data and FEC data, make sure you reset the
+         * ih_type field of the header also.
+         */
+        /* Lab6: YOUR CODE HERE */
+        if ((snd_next - fec_window_start) % fwnd == 0 || (int) seqno > imgsize) {
+          // Check if we should drops the packet
+          if (((float) random())/INT_MAX < pdrop) {
+            fprintf(stderr, "imgdb_sendimg: DROPPED FEC packet with offset 0x%x, 0x%x bytes\n",
+                    seqno, segsize);
+          } else {
+            // Prepare for FEC send
+            ihdr.ih_type = NETIMG_FEC | NETIMG_DATA;
+            ihdr.ih_size = htons( (unsigned short) datasize);
+            ihdr.ih_seqn = htonl(seqno);
+
+            iovec_arr[1].iov_base = (void *) fec_buff;
+            iovec_arr[1].iov_len = datasize;
+            
+            fprintf(stderr, "imgdb_sendimg: sent FEC packet with offset 0x%x, %d bytes\n",
+                    seqno, segsize);
+
+            int fec_send_result = sendmsg(sd, &msg, 0);
+            net_assert(fec_send_result == -1, "Failed to send FEC to client");
+
+            // Prepare for DATA send
+            ihdr.ih_type = NETIMG_DATA;
+          }
+
+          // Adjust "usable window" for FEC packet
+          assert(num_fec_sent >= num_fec_acked);
+          ++num_fec_sent;
+        }
       }
 
       // Await ACKS from receiver w/timeout
@@ -526,9 +604,13 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             // Advance sliding window, if ACK acknowledges new segments
             unsigned int ack_seg = ntohl(ack.ih_seqn) / datasize;
 
+            // Check if client has ACKed new segments
             if (ack_seg > snd_una) {
               snd_una = ack_seg; 
             }
+
+            // Detect ACKed FEC packets
+            num_fec_acked = ack_seg / this->fwnd;
           }
         } while (more_acks);
 
@@ -555,6 +637,9 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 
     fprintf(stderr, "fin-ack: vers: 0x%x, type: 0x%x, seqn: 0x%x\n",
         ack.ih_vers, ack.ih_type, ack.ih_seqn);
+
+    delete[] fec_buff;
+    fec_buff = nullptr;
   }
 }
 
