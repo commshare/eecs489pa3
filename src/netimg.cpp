@@ -567,7 +567,7 @@ netimg_recvimg(void)
             ack_seq = nextSeqNo_; 
           
             // Check if expected segment was a missing segment
-            if (numMissingSegs_ && firstMissingSeqNo_ == nextSeqNo_) {
+            if (numMissingSegs_ != 0 && firstMissingSeqNo_ == nextSeqNo_) {
 
               // Report that we've found the missing segment!
               fprintf(
@@ -755,24 +755,25 @@ netimg_recvimg(void)
               ? img_size - nextSeqNo_
               : datasize;
         }
-
-        // Put client in GBN mode b/c more than one packet has been lost
-        if (!inGbnMode_) {
-         
-          // Check if we have multiple missing segments within this FEC window
-          if (numMissingSegs_ > 1) {
-            // Report GBN transition due to multiple missing segs within the same FEC window
-            fprintf(
-                stderr,
-                "\t- Entering GBN mode b/c %u packet(s) have been lost within the same FEC window.\n",
-                numMissingSegs_
-            );
-            
-            // Trigger GBN mode
-            inGbnMode_ = true;
-          } 
-        }
       }
+        
+      // Put client in GBN mode b/c more than one packet has been lost
+      if (!inGbnMode_) {
+       
+        // Check if we have multiple missing segments within this FEC window
+        if (numMissingSegs_ > 1) {
+          // Report GBN transition due to multiple missing segs within the same FEC window
+          fprintf(
+              stderr,
+              "\t- Entering GBN mode b/c %u packet(s) have been lost within the same FEC window.\n",
+              numMissingSegs_
+          );
+          
+          // Trigger GBN mode
+          inGbnMode_ = true;
+        } 
+      }
+
 
       // Advance FEC window (recovered single dropped pkt or received all pkts)
       if (!inGbnMode_) {

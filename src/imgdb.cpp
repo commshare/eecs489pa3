@@ -405,22 +405,22 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
        */
       /* PA3: YOUR CODE HERE */
       unsigned int window_limit = snd_una + window - (num_fec_sent - num_fec_acked); /* usable window */
-      unsigned int snd_limit = (window_limit < max_segment)
+      unsigned int snd_limit = (window_limit < max_segment + 1)
           ? window_limit
-          : max_segment;
+          : max_segment + 1;
       
       // Send a usable-window-full of packets
-      fprintf(
-          stderr,
-          "imgdb::sendimg() sending image, snd-next: %u, snd-limit: %u\n",
-          snd_next,
-          snd_limit
-      );
+      // fprintf(
+      //     stderr,
+      //     "imgdb::sendimg() sending image, snd-next: %u, snd-limit: %u\n",
+      //     snd_next,
+      //     snd_limit
+      // );
 
       // Saturate sending window
-      while (snd_next <= snd_limit) {
-        //fprintf(stderr, "- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
-          //  snd_una, snd_next, window, snd_limit);
+      while (snd_next + (num_fec_sent - num_fec_acked) < snd_limit) {
+        fprintf(stderr, "- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
+           snd_una, snd_next, window, snd_limit);
         
         // Compute segment dimensions
         unsigned int seqno = snd_next * datasize;
@@ -508,7 +508,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
          * ih_type field of the header also.
          */
         /* Lab6: YOUR CODE HERE */
-        if ((snd_next - fec_window_start) % fwnd == 0 || (int) seqno > imgsize) {
+        if ((snd_next - fec_window_start) % fwnd == 0 || (int) seqno == imgsize) {
           // Check if we should drops the packet
           if (((float) random())/INT_MAX < pdrop) {
             fprintf(stderr, "imgdb_sendimg: DROPPED FEC packet with offset 0x%x, 0x%x bytes\n",
@@ -535,6 +535,9 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           // Adjust "usable window" for FEC packet
           assert(num_fec_sent >= num_fec_acked);
           ++num_fec_sent;
+
+          // Reposition FEC window
+          fec_window_start = snd_una;
         }
       }
 
