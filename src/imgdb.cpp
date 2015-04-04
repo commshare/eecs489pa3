@@ -397,7 +397,6 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
     unsigned int num_fec_acked = 0;
 
     do {
-
       /* PA3 Task 2.2: estimate the receiver's receive buffer based on packets
        * that have been sent and ACKed, including outstanding FEC packet(s).
        * We can only send as much as the receiver can buffer.
@@ -455,7 +454,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         }
 
         // Probabilistically drop segment
-        if (((float) random())/INT_MAX < pdrop) {
+        if (((float) random())/INT_MAX < pdrop) { /* drop segment */
           // Report dropped segment
           fprintf(stderr, "imgdb_sendimg: DROPPED DATA packet with offset 0x%x, %d bytes\n",
                   seqno, segsize);
@@ -617,9 +616,22 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         fprintf(stderr, "Received ACKS! new snd_una: %u\n", snd_una);
 
       } else { /* We haven't received any traffic => RTO! */
-        fprintf(stderr, "no ACKs received, so Go-Back-N!\n");
+        // Report GBN RTO!
+        fprintf(
+            stderr,
+            "- No ACKs received => Go-Back-N activated! snd-next: %u -> %u, fec-window-start: %u -> %u, num-fec-sent: %u -> %u\n",
+            snd_next,
+            snd_una,
+            fec_window_start,
+            snd_una,
+            num_fec_sent,
+            num_fec_acked
+        );
+
         // Retransmit an entire window-full of segments starting at 'snd_una'
         snd_next = snd_una; 
+        fec_window_start = snd_una;
+        num_fec_sent = num_fec_acked;
       }
 
     } while (snd_una < max_segment); // iterate until we've acknowledged all pkts

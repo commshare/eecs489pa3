@@ -315,7 +315,7 @@ netimg_recvimg(void)
      * current FEC window, reset your count of packets received, and
      * determine the next expected packet.
      */
-    /* Lab6: YOUR CODE HERE */
+/* Lab6: YOUR CODE HERE */
 
     /* PA3: Task 4.2: 
      *
