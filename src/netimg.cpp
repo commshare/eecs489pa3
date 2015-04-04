@@ -321,7 +321,7 @@ netimg_recvimg(void)
     // Report that we've received a DATA segment   
     fprintf(
         stderr,
-        "netimg_recvimg: received DATA pkt 0x%x, %d bytes.\n",
+        "\nnetimg_recvimg: received DATA pkt 0x%x, %d bytes.\n",
         seqn,
         size
     );
@@ -371,7 +371,7 @@ netimg_recvimg(void)
         // Report that we're ignoring this segment
         fprintf(
             stderr,
-            "\t- Ignoring packet b/c we're in GBN mode and waiting for seqn: 0x%x\n",
+            "\t- Ignoring pkt b/c we're in GBN mode and waiting for DATA pkt: 0x%x\n",
             nextSeqNo_
         );
       } 
@@ -461,16 +461,18 @@ netimg_recvimg(void)
           // Enumerate remaining dropped packts, if any
           unsigned int next_seqno = nextSeqNo_;
 
-          while (next_seqno < seqn) {
+          fprintf(stderr, "DEBUG -- next-seqno: 0x%x, seqn: 0x%x\n", next_seqno, seqn);
+
+          while (nextSeqNo_ < seqn) {
             // Check if this is a dropped FEC packet that we haven't processed yet
-            if ((next_seqno - currFecSeqNo_) % fwnd == 0 
-                && currFecSeqNo_ != next_seqno) {
+            if ((nextSeqNo_ - currFecSeqNo_) % fwnd == 0 
+                && currFecSeqNo_ != nextSeqNo_) {
               
               // Report that we've dropped this FEC segment
               fprintf(
                   stderr,
                   "\t- Dropped FEC segment 0x%x\n",
-                  next_seqno
+                  nextSeqNo_
               );
 
               ++numMissingSegs_;
@@ -485,7 +487,7 @@ netimg_recvimg(void)
               fprintf(
                   stderr,
                   "\t- FEC packet 0x%x was dropped along with a DATA packet from the same FEC window, 0x%x. Entering GBN mode.\n",
-                  next_seqno,
+                  nextSeqNo_,
                   firstMissingSeqNo_
               );
 
@@ -498,16 +500,16 @@ netimg_recvimg(void)
             fprintf(
                 stderr,
                 "\t- Dropped DATA segment 0x%x\n",
-                next_seqno
+                nextSeqNo_
             );
 
             ++numMissingSegs_;
 
             // Check if this is the first missing segment 
             if (numMissingSegs_ == 1) {
-              firstMissingSeqNo_ = next_seqno;
+              firstMissingSeqNo_ = nextSeqNo_;
             
-            } else if (firstMissingSeqNo_ + datasize == next_seqno) { /* check for consecutive segment drops */
+            } else if (firstMissingSeqNo_ + datasize == nextSeqNo_) { /* check for consecutive segment drops */
               
               // Report that we've dropped multiple segments and that we're
               // transitioning to GBN
@@ -515,7 +517,7 @@ netimg_recvimg(void)
                   stderr,
                   "\t- Dropped two consecutive segments: first segment 0x%x, second segment 0x%x. Entering GBN mode.\n",
                   firstMissingSeqNo_,
-                  next_seqno
+                  nextSeqNo_
               );
 
               // Transition to GBN mode and short circuit
@@ -523,11 +525,11 @@ netimg_recvimg(void)
               break;
             }
             
-            unsigned int dropped_pkt_size = (datasize > img_size - next_seqno)
-                ? img_size - next_seqno 
+            unsigned int dropped_pkt_size = (datasize > img_size - nextSeqNo_)
+                ? img_size - nextSeqNo_ 
                 : datasize;
 
-            next_seqno += dropped_pkt_size;
+            nextSeqNo_ += dropped_pkt_size;
           }
         }
 
@@ -537,6 +539,11 @@ netimg_recvimg(void)
         if (!inGbnMode_) {
           // Send ACK to server
           unsigned int ack_seq = 0;
+         
+          // Advance next-seq-no
+          nextSeqNo_ += (datasize > img_size - nextSeqNo_)
+              ? img_size - nextSeqNo_
+              : datasize;
          
           // Send ACK to server
           if (numMissingSegs_) { /* ACK for the missing segment */
@@ -555,9 +562,6 @@ netimg_recvimg(void)
 //fprintf(stderr, "1DEBUG: next-seqno: 0x%x, img-size: 0x%lx, size: 0x%x\n", nextSeqNo_, img_size, size);
 
             // Advance next-seq-number to next expected segment
-            nextSeqNo_ += (datasize > img_size - nextSeqNo_)
-                ? img_size - nextSeqNo_
-                : datasize;
 //fprintf(stderr, "2DEBUG: next-seqno: 0x%x, img-size: 0x%lx, size: 0x%x\n", nextSeqNo_, img_size, size);
             
             ack_seq = nextSeqNo_; 
@@ -619,7 +623,7 @@ netimg_recvimg(void)
      * This is an adaptation of your Lab5 code.
      */
     /* Lab6: YOUR CODE HERE */
-    fprintf(stderr, "netimg_recvimg: received FEC offset 0x%x, %d bytes\n",
+    fprintf(stderr, "\nnetimg_recvimg: received FEC offset 0x%x, %d bytes\n",
             seqn, size);
     
     unsigned int datasize = mss - sizeof(ihdr_t) - NETIMG_UDPIP;
@@ -667,7 +671,15 @@ netimg_recvimg(void)
     /* Lab6: YOUR CODE HERE */
 
     // Check for skipped data segments
-    if (!inGbnMode_) {
+    if (inGbnMode_) { /* discard FEC pkts when in GBN mode */
+      // Report that we're discarding the FEC packet 
+      fprintf(
+          stderr,
+          "\t- Ignoring pkt b/c we're in GBN mode and waiting for DATA pkt 0x%x\n",
+          nextSeqNo_
+      );
+
+    } else { /* not in GBN mode and we should process FEC pkt */
       
       // Check for dropped pkts
       if (seqn > nextSeqNo_) {
@@ -675,12 +687,12 @@ netimg_recvimg(void)
         // Enumerate all dropped pkts
         unsigned int next_seqno = nextSeqNo_;
 
-        while (next_seqno < seqn) {
-          //fprintf(stderr, "DEBUG: next-seqno: 0x%x, seqn: 0x%x\n", next_seqno, seqn);
+        while (nextSeqNo_ < seqn) {
+          //fprintf(stderr, "DEBUG: next-seqno: 0x%x, seqn: 0x%x\n", nextSeqNo_, seqn);
           // Determine type of dropped packet
-          if ((next_seqno - currFecSeqNo_) % fwnd == 0) { /* dropped packet is FEC */
+          if ((nextSeqNo_ - currFecSeqNo_) % fwnd == 0) { /* dropped packet is FEC */
             // Report dropped FEC pkt
-            fprintf(stderr, "\t- Dropped FEC pkt 0x%x\n", next_seqno);
+            fprintf(stderr, "\t- Dropped FEC pkt 0x%x\n", nextSeqNo_);
 
             // Check if we've dropped the FEC packet of a complete DATA window
             if (numMissingSegs_ == 0) { /* Skip dropped FEC pkt, b/c we don't need it*/
@@ -688,11 +700,11 @@ netimg_recvimg(void)
               fprintf(
                   stderr,
                   "\t\t- Ignoring dropped FEC pkt b/c we already have all of the DATA packets for that FEC window. Repositioning FEC window to 0x%x\n",
-                 next_seqno 
+                 nextSeqNo_ 
               );
 
               // Reposition FEC window
-              currFecSeqNo_ = next_seqno;
+              currFecSeqNo_ = nextSeqNo_;
 
             } else { /* register dropped FEC pkt */
              
@@ -702,7 +714,7 @@ netimg_recvimg(void)
                 fprintf(
                     stderr,
                     "\t- Entering GBN mode b/c we dropped FEC pkt 0x%x and DATA pkt 0x%x from the same FEC window.\n",
-                    next_seqno,
+                    nextSeqNo_,
                     firstMissingSeqNo_
                 );
 
@@ -714,24 +726,24 @@ netimg_recvimg(void)
           }
           
           // Report dropped DATA pkt
-          fprintf(stderr, "\t- Dropped DATA pkt: offset: 0x%x\n", next_seqno); 
+          fprintf(stderr, "\t- Dropped DATA pkt: offset: 0x%x\n", nextSeqNo_); 
          
           // Track number of missing segements
           ++numMissingSegs_;
 
           // Register first missing DATA segment
           if (numMissingSegs_ == 1) {
-            firstMissingSeqNo_ = next_seqno;
+            firstMissingSeqNo_ = nextSeqNo_;
           }
 
           // Check for consecutive missing segments
-          if (numMissingSegs_ == 2 && firstMissingSeqNo_ == next_seqno - datasize) {
+          if (numMissingSegs_ == 2 && firstMissingSeqNo_ == nextSeqNo_ - datasize) {
             // Report client is IMMEDIATELY entering GBN mode
             fprintf(
                 stderr,
                 "\t- Encountered consecutive missing DATA segments: first seqn (DATA): 0x%x, second seqn (DATA): 0x%x\n",
                 firstMissingSeqNo_,
-                next_seqno
+                nextSeqNo_
             );   
            
             // Enter GBN mode
@@ -739,7 +751,9 @@ netimg_recvimg(void)
             break; /* short circuit for consecutive drops */
           }
 
-          next_seqno += datasize;
+          nextSeqNo_ += (datasize > img_size - nextSeqNo_)
+              ? img_size - nextSeqNo_
+              : datasize;
         }
 
         // Put client in GBN mode b/c more than one packet has been lost
@@ -805,9 +819,9 @@ netimg_recvimg(void)
           //fprintf(stderr, "DEBUG: last-segment-seqno: 0x%x, next-seqno: 0x%x, img-size: 0x%lx, datasize: 0x%x\n", last_segment_seqno, nextSeqNo_, img_size, datasize);
 
           // Advance the next expected sequence number
-          nextSeqNo_ += (last_segment_seqno == nextSeqNo_)
-              ? img_size - nextSeqNo_
-              : datasize; 
+          // nextSeqNo_ += (last_segment_seqno == nextSeqNo_)
+          //     ? img_size - nextSeqNo_
+          //     : datasize; 
 
           // Send back ACK for FEC packet 
           ihdr_t ack = {
@@ -841,7 +855,7 @@ netimg_recvimg(void)
         numFecSegs_ = 0;
         currFecSeqNo_ = seqn;
     
-        //fprintf(stderr, "DEBUG: next-seq-no: 0x%x, seqn: 0x%x\n", nextSeqNo_, seqn);
+        fprintf(stderr, "DEBUG: next-seq-no: 0x%x, seqn: 0x%x\n", nextSeqNo_, seqn);
         assert(nextSeqNo_ == seqn);
         assert(numMissingSegs_ == 0);
       }
