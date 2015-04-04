@@ -419,8 +419,8 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 
       // Saturate sending window
       while (snd_next <= snd_limit) {
-        fprintf(stderr, "- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
-            snd_una, snd_next, window, snd_limit);
+        //fprintf(stderr, "- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
+          //  snd_una, snd_next, window, snd_limit);
         
         // Compute segment dimensions
         unsigned int seqno = snd_next * datasize;
@@ -480,11 +480,14 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           net_assert(sendmsg(sd, &msg, 0) == -1, "imgdb::sendimg() Failed to send message");
          
           // Report segment send
-          fprintf(stderr, "imgdb_sendimg: sending offset 0x%x, %d bytes\n",
-                  snd_next, segsize);
+          fprintf(stderr, "imgdb_sendimg: sending packet 0x%x, %d bytes\n",
+                  seqno, segsize);
         }
 
-        ++snd_next;
+        seqno = ++snd_next * datasize;
+        if (seqno > imgsize) {
+          seqno = imgsize;
+        }
       
         /* Lab6 Task 1
          *
@@ -520,7 +523,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             iovec_arr[1].iov_len = datasize;
             
             fprintf(stderr, "imgdb_sendimg: sent FEC packet with offset 0x%x, %d bytes\n",
-                    seqno, segsize);
+                    seqno, datasize);
 
             int fec_send_result = sendmsg(sd, &msg, 0);
             net_assert(fec_send_result == -1, "Failed to send FEC to client");
@@ -601,7 +604,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             );
 
             // Advance sliding window, if ACK acknowledges new segments
-            unsigned int ack_seg = ntohl(ack.ih_seqn) / datasize;
+            unsigned int ack_seg = (ntohl(ack.ih_seqn) + datasize - 1) / datasize;
 
             // Check if client has ACKed new segments
             if (ack_seg > snd_una) {
@@ -610,6 +613,8 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 
             // Detect ACKed FEC packets
             num_fec_acked = ack_seg / this->fwnd;
+
+            fprintf(stderr, "\n- Ack: vers: 0x%x, type: 0x%x, seqn: 0x%x\n", ack.ih_vers, ack.ih_type, htonl(ack.ih_seqn));
           }
         } while (more_acks);
 
@@ -634,7 +639,9 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         num_fec_sent = num_fec_acked;
       }
 
-    } while (snd_una < max_segment); // iterate until we've acknowledged all pkts
+      fprintf(stderr, "snd-una: 0x%x, max_segment: 0x%x\n", snd_una, max_segment);
+
+    } while (snd_una <= max_segment); // iterate until we've acknowledged all pkts
 
     fprintf(stderr, "- Sending FIN packet\n");
     // Send NETIMG_FIN packet

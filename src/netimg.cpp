@@ -289,6 +289,9 @@ netimg_recvimg(void)
   }
 
   net_assert(hdr.ih_vers != NETIMG_VERS, "Invalid ihdr_t version");
+  if (!(NETIMG_DATA & hdr.ih_type)) {
+    fprintf(stderr, "DEBUG: hdr.ih_type: 0x%x\n", hdr.ih_type);
+  }
   net_assert(!(NETIMG_DATA & hdr.ih_type), "Invalid ihdr_t type received!");
 
   uint16_t size = ntohs(hdr.ih_size);
@@ -318,7 +321,7 @@ netimg_recvimg(void)
     // Report that we've received a DATA segment   
     fprintf(
         stderr,
-        "netimg_recvimg: received DATA offset 0x%x, %d bytes ",
+        "netimg_recvimg: received DATA pkt 0x%x, %d bytes.\n",
         seqn,
         size
     );
@@ -542,12 +545,21 @@ netimg_recvimg(void)
             // Report ACK for missing segment
             fprintf(
                 stderr,
-                "\t- Sending ACK to server 0x%x for missing segment. Total missing segments: %u.\n",
+                "\t- Sending ACK 0x%x to server for missing segment. Total missing segments: %u.\n",
                 ack_seq,
                 numMissingSegs_
             );
 
           } else { /* ACK for the next segment */
+
+//fprintf(stderr, "1DEBUG: next-seqno: 0x%x, img-size: 0x%lx, size: 0x%x\n", nextSeqNo_, img_size, size);
+
+            // Advance next-seq-number to next expected segment
+            nextSeqNo_ += (datasize > img_size - nextSeqNo_)
+                ? img_size - nextSeqNo_
+                : datasize;
+//fprintf(stderr, "2DEBUG: next-seqno: 0x%x, img-size: 0x%lx, size: 0x%x\n", nextSeqNo_, img_size, size);
+            
             ack_seq = nextSeqNo_; 
           
             // Check if expected segment was a missing segment
@@ -556,7 +568,7 @@ netimg_recvimg(void)
               // Report that we've found the missing segment!
               fprintf(
                   stderr,
-                  "\t- We've received the missing segment! Num-missing-segs going from %u to %u\n",
+                  "\t- We've received the missing segment! Number of missing segments going from %u to %u\n",
                   numMissingSegs_,
                   0
               );
@@ -564,16 +576,11 @@ netimg_recvimg(void)
               // Reset num-missing-segs count
               numMissingSegs_ = 0;
             }
-
-            // Advance next-seq-number to next expected segment
-            nextSeqNo_ += (datasize > img_size - nextSeqNo_)
-                ? img_size - nextSeqNo_
-                : datasize;
             
             // Report ACK for next segment 
             fprintf(
                 stderr,
-                "\t- Sending ACK to server 0x%x for next segment.\n",
+                "\t- Sending ACK 0x%x to server for next segment.\n",
                 ack_seq
             );
           }
@@ -669,6 +676,7 @@ netimg_recvimg(void)
         unsigned int next_seqno = nextSeqNo_;
 
         while (next_seqno < seqn) {
+          //fprintf(stderr, "DEBUG: next-seqno: 0x%x, seqn: 0x%x\n", next_seqno, seqn);
           // Determine type of dropped packet
           if ((next_seqno - currFecSeqNo_) % fwnd == 0) { /* dropped packet is FEC */
             // Report dropped FEC pkt
@@ -757,7 +765,7 @@ netimg_recvimg(void)
         // Check if we can recover a lost packet
         if (numMissingSegs_ == 1) { /* recover lost packet */
           // Report DATA packet recovery
-          fprintf(stderr, "All but one DATA packet received! Recovering DATA packet 0x%x\n", firstMissingSeqNo_); 
+          fprintf(stderr, "\t- All but one DATA packet received! Recovering DATA packet 0x%x\n", firstMissingSeqNo_); 
           
           // Recover missing packet
           unsigned int last_segment_seqno = img_size - (img_size % datasize);
@@ -771,8 +779,13 @@ netimg_recvimg(void)
                   : datasize;
 
               // DEBUG
-              fprintf(stderr, "\t- XOR details: seqn: 0x%x, datasize: %u, segsize: %u\n",
-                  i, datasize, segsize);
+              fprintf(
+                  stderr,
+                  "\t- XOR details: seqn: 0x%x, datasize: %u, segsize: %u\n",
+                  i,
+                  datasize,
+                  segsize
+              );
               
               // Perform simple XOR magic on the image DATA segments and the FEC data
               // in order to recover the missing segment
@@ -788,6 +801,13 @@ netimg_recvimg(void)
           memcpy(image + firstMissingSeqNo_, fec_buff, missing_segment_size);
 
           --numMissingSegs_;
+
+          //fprintf(stderr, "DEBUG: last-segment-seqno: 0x%x, next-seqno: 0x%x, img-size: 0x%lx, datasize: 0x%x\n", last_segment_seqno, nextSeqNo_, img_size, datasize);
+
+          // Advance the next expected sequence number
+          nextSeqNo_ += (last_segment_seqno == nextSeqNo_)
+              ? img_size - nextSeqNo_
+              : datasize; 
 
           // Send back ACK for FEC packet 
           ihdr_t ack = {
@@ -807,17 +827,21 @@ netimg_recvimg(void)
             net_assert(ack_result == -1, "netimg_recvimg() failed to send FEC ACK packet to server\n");
           }
 
+          // Unregister missing segment that we just recovered
+          numMissingSegs_ = 0;
+
         } else { /* all packet received, nothing to be done */
           assert(numMissingSegs_ == 0); /* should be in gbn mode, otherwise */
 
           // Report that all data pkts have been received
-          fprintf(stderr, "All DATA packets received! No recovery necessary.\n");
+          fprintf(stderr, "\t- All DATA packets received! No recovery necessary.\n");
         }
 
         // Advance FEC window
         numFecSegs_ = 0;
         currFecSeqNo_ = seqn;
-        
+    
+        //fprintf(stderr, "DEBUG: next-seq-no: 0x%x, seqn: 0x%x\n", nextSeqNo_, seqn);
         assert(nextSeqNo_ == seqn);
         assert(numMissingSegs_ == 0);
       }
@@ -834,7 +858,7 @@ netimg_recvimg(void)
     int fin_result = recv(sd, (void *) &hdr, sizeof(hdr), 0);
     net_assert(fin_result == -1, "netimg_recvimg() failed to read NETIMG_FIN packet off of wire.\n");
 
-    fprintf(stderr, "netimg_recvimg: received NETIMG_FIN\n");
+    fprintf(stderr, "netimg_recvimg: received NETIMG_FIN. Sending FIN-ACK\n");
     
     // Create FIN ACK packet
     ihdr_t fin_ack = {
@@ -847,7 +871,7 @@ netimg_recvimg(void)
     // Probabilistically send FIN-ACK
     if (((float) random())/INT_MAX < pdrop) {
       // Report dropped ACK 
-      fprintf(stderr, "imgdb_sendimg: DROPPED ACK seqn: %s\n", "NETIMG_FINSEQ");
+      fprintf(stderr, "\t- DROPPED ACK seqn: %s\n", "NETIMG_FINSEQ");
 
     } else { /* send segment */
       int fin_ack_result = send(sd, (void *) &fin_ack, sizeof(ihdr_t), 0);
