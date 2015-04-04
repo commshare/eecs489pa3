@@ -372,7 +372,7 @@ netimg_recvimg(void)
         fprintf(
             stderr,
             "\t- Ignoring pkt b/c we're in GBN mode and waiting for DATA pkt: 0x%x\n",
-            nextSeqNo_
+           firstMissingSeqNo_ 
         );
       } 
     }
@@ -415,9 +415,51 @@ netimg_recvimg(void)
         // Report that we're ignoring this packet
         fprintf(
             stderr,
-            "\t- Ignoring packet b/c its seqn is less than the one we're waiting for, 0x%x\n",
+            "\t- Not the pkt we're waiting for. (0x%x)\n",
             nextSeqNo_
         );
+
+        unsigned int ack_seq = 0;
+        
+        if (numMissingSegs_) { /* ACK for missing segment */
+          ack_seq = firstMissingSeqNo_;
+          
+          // Report ACK for missing segment
+          fprintf(
+              stderr,
+              "\t- Sending ACK 0x%x to server for missing segment. Total missing segments: %u.\n",
+              ack_seq,
+              numMissingSegs_
+          );
+
+        } else { /* ACK for expected segment */
+          ack_seq = nextSeqNo_;
+          
+          // Report ACK for next segment 
+          fprintf(
+              stderr,
+              "\t- Sending ACK 0x%x to server for next segment.\n",
+              ack_seq
+          );
+        }
+
+        // Send back ACK
+        ihdr_t ack = {
+            NETIMG_VERS,
+            NETIMG_ACK,
+            0,
+            htonl(ack_seq)
+        };
+        
+        // Probabilistically send ACK
+        if (((float) random())/INT_MAX < pdrop) {
+          // Report dropped ACK 
+          fprintf(stderr, "\t\t- DROPPED ACK 0x%x\n", ack_seq);
+
+        } else { /* send segment */
+          int ack_result = send(sd, (void *) &ack, sizeof(ihdr_t), 0);
+          net_assert(ack_result == -1, "netimg_recvimg() failed to send ACK packet to server\n");
+        }
 
       } else { /* process packet */
 
@@ -676,7 +718,7 @@ netimg_recvimg(void)
       fprintf(
           stderr,
           "\t- Ignoring pkt b/c we're in GBN mode and waiting for DATA pkt 0x%x\n",
-          nextSeqNo_
+          firstMissingSeqNo_ 
       );
 
     } else { /* not in GBN mode and we should process FEC pkt */

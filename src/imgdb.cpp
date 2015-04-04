@@ -49,6 +49,8 @@ using namespace std;
 #define MINPROB 0.011
 #define MAXPROB 0.11
 
+int dummycounter = 0;
+
 /*
  * imgdb_args: parses command line args.
  *
@@ -419,11 +421,11 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 
       // Saturate sending window
       while (snd_next + (num_fec_sent - num_fec_acked) < snd_limit) {
-        fprintf(stderr, "- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
+        fprintf(stderr, "LOOPSTART -- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
            snd_una, snd_next, window, snd_limit);
         
         // Compute segment dimensions
-        unsigned int seqno = snd_next * datasize;
+        long seqno = snd_next * datasize;
         unsigned int segsize = (imgsize - seqno < datasize)
             ? imgsize - seqno
             : datasize;
@@ -456,7 +458,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         // Probabilistically drop segment
         if (((float) random())/INT_MAX < pdrop) { /* drop segment */
           // Report dropped segment
-          fprintf(stderr, "imgdb_sendimg: DROPPED DATA packet with offset 0x%x, %d bytes\n",
+          fprintf(stderr, "imgdb_sendimg: DROPPED DATA packet with offset 0x%lx, %d bytes\n",
                   seqno, segsize);
 
         } else { /* send segment */
@@ -472,7 +474,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           /* DONE */
 
           ihdr.ih_size = htons(segsize);
-          ihdr.ih_seqn = htonl(seqno);
+          ihdr.ih_seqn = htonl((unsigned int)seqno);
           iovec_arr[1].iov_base = (void *) (ip + seqno);
           iovec_arr[1].iov_len = segsize;
 
@@ -480,7 +482,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           net_assert(sendmsg(sd, &msg, 0) == -1, "imgdb::sendimg() Failed to send message");
          
           // Report segment send
-          fprintf(stderr, "imgdb_sendimg: sending packet 0x%x, %d bytes\n",
+          fprintf(stderr, "imgdb_sendimg: sending packet 0x%lx, %d bytes\n",
                   seqno, segsize);
         }
 
@@ -508,21 +510,23 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
          * ih_type field of the header also.
          */
         /* Lab6: YOUR CODE HERE */
-        if ((snd_next - fec_window_start) % fwnd == 0 || (int) seqno == imgsize) {
+        fprintf(stderr, "FEC-SEND-LOGIC: snd-next: %u, fec-window-start: %u, fwnd: %u, seqno: 0x%lx, imgsize: 0x%lx\n",
+            snd_next, fec_window_start, fwnd, seqno, imgsize);
+        if ((snd_next - fec_window_start) % fwnd == 0 || seqno == imgsize) {
           // Check if we should drops the packet
           if (((float) random())/INT_MAX < pdrop) {
-            fprintf(stderr, "imgdb_sendimg: DROPPED FEC packet with offset 0x%x, 0x%x bytes\n",
+            fprintf(stderr, "imgdb_sendimg: DROPPED FEC packet with offset 0x%lx, 0x%x bytes\n",
                     seqno, segsize);
           } else {
             // Prepare for FEC send
             ihdr.ih_type = NETIMG_FEC | NETIMG_DATA;
             ihdr.ih_size = htons( (unsigned short) datasize);
-            ihdr.ih_seqn = htonl(seqno);
+            ihdr.ih_seqn = htonl( (unsigned int) seqno);
 
             iovec_arr[1].iov_base = (void *) fec_buff;
             iovec_arr[1].iov_len = datasize;
             
-            fprintf(stderr, "imgdb_sendimg: sent FEC packet with offset 0x%x, %d bytes\n",
+            fprintf(stderr, "imgdb_sendimg: sent FEC packet with offset 0x%lx, %d bytes\n",
                     seqno, datasize);
 
             int fec_send_result = sendmsg(sd, &msg, 0);
