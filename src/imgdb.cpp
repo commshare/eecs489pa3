@@ -541,7 +541,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           ++num_fec_sent;
 
           // Reposition FEC window
-          fec_window_start = snd_una;
+          fec_window_start = snd_next;
         }
       }
 

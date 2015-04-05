@@ -464,6 +464,8 @@ netimg_recvimg(void)
       } else { /* process packet */
 
         // Check if we missed an FEC packet
+        fprintf(stderr, "MISSED-FEC: next-seqno: 0x%x, next-fec-seqno: 0x%x\n",
+            nextSeqNo_, next_fec_seq_no);
         if (nextSeqNo_ == next_fec_seq_no) { /* we've dropped an FEC pkt */
           
           // Determine if we can recover from the dropped FEC packet
@@ -505,74 +507,87 @@ netimg_recvimg(void)
 
           fprintf(stderr, "DEBUG -- next-seqno: 0x%x, seqn: 0x%x\n", next_seqno, seqn);
 
-          while (nextSeqNo_ < seqn) {
-            // Check if this is a dropped FEC packet that we haven't processed yet
-            if ((nextSeqNo_ - currFecSeqNo_) % fwnd == 0 
-                && currFecSeqNo_ != nextSeqNo_) {
-              
-              // Report that we've dropped this FEC segment
+          if (nextSeqNo_ < seqn) {
+            while (nextSeqNo_ < seqn) {
+              // Check if this is a dropped FEC packet that we haven't processed yet
+              if ((nextSeqNo_ - currFecSeqNo_) % fwnd == 0 
+                  && currFecSeqNo_ != nextSeqNo_) {
+                
+                // Report that we've dropped this FEC segment
+                fprintf(
+                    stderr,
+                    "\t- Dropped FEC segment 0x%x\n",
+                    nextSeqNo_
+                );
+
+                ++numMissingSegs_;
+
+                // Must fail if we're missing a FEC here. FEC can't be the first
+                // segment that we're missing here b/c we would've handled this case
+                // earlier. Can't be greater than 2, b/c that would've triggered
+                // GBN already.
+                assert(numMissingSegs_ != 2);
+
+                // Report that we're going into GBN mode
+                fprintf(
+                    stderr,
+                    "\t- FEC packet 0x%x was dropped along with a DATA packet from the same FEC window, 0x%x. Entering GBN mode.\n",
+                    nextSeqNo_,
+                    firstMissingSeqNo_
+                );
+
+                // Transition to GBN mode and short circuit
+                inGbnMode_ = true;
+                break;
+              }
+
+              // Report that we've dropped a DATA segment
               fprintf(
                   stderr,
-                  "\t- Dropped FEC segment 0x%x\n",
+                  "\t- Dropped DATA segment 0x%x\n",
                   nextSeqNo_
               );
 
               ++numMissingSegs_;
 
-              // Must fail if we're missing a FEC here. FEC can't be the first
-              // segment that we're missing here b/c we would've handled this case
-              // earlier. Can't be greater than 2, b/c that would've triggered
-              // GBN already.
-              assert(numMissingSegs_ != 2);
+              // Check if this is the first missing segment 
+              if (numMissingSegs_ == 1) {
+                firstMissingSeqNo_ = nextSeqNo_;
+              
+              } else if (firstMissingSeqNo_ + datasize == nextSeqNo_) { /* check for consecutive segment drops */
+                
+                // Report that we've dropped multiple segments and that we're
+                // transitioning to GBN
+                fprintf(
+                    stderr,
+                    "\t- Dropped two consecutive segments: first segment 0x%x, second segment 0x%x. Entering GBN mode.\n",
+                    firstMissingSeqNo_,
+                    nextSeqNo_
+                );
 
-              // Report that we're going into GBN mode
+                // Transition to GBN mode and short circuit
+                inGbnMode_ = true;
+                break;
+              }
+              
+              unsigned int dropped_pkt_size = (datasize > img_size - nextSeqNo_)
+                  ? img_size - nextSeqNo_ 
+                  : datasize;
+
+              nextSeqNo_ += dropped_pkt_size;
+            }
+
+            if (currFecSeqNo_ != seqn && (seqn - currFecSeqNo_) % datasize == 0) {
+              assert(numMissingSegs_);
+              
               fprintf(
                   stderr,
-                  "\t- FEC packet 0x%x was dropped along with a DATA packet from the same FEC window, 0x%x. Entering GBN mode.\n",
-                  nextSeqNo_,
+                  "\t- Dropped FEC segment 0x%x in addition to DATA segment 0x%x from same window. Entering GBN mode.\n",
+                  seqn,
                   firstMissingSeqNo_
               );
-
-              // Transition to GBN mode and short circuit
-              inGbnMode_ = true;
-              break;
             }
-
-            // Report that we've dropped a DATA segment
-            fprintf(
-                stderr,
-                "\t- Dropped DATA segment 0x%x\n",
-                nextSeqNo_
-            );
-
-            ++numMissingSegs_;
-
-            // Check if this is the first missing segment 
-            if (numMissingSegs_ == 1) {
-              firstMissingSeqNo_ = nextSeqNo_;
-            
-            } else if (firstMissingSeqNo_ + datasize == nextSeqNo_) { /* check for consecutive segment drops */
-              
-              // Report that we've dropped multiple segments and that we're
-              // transitioning to GBN
-              fprintf(
-                  stderr,
-                  "\t- Dropped two consecutive segments: first segment 0x%x, second segment 0x%x. Entering GBN mode.\n",
-                  firstMissingSeqNo_,
-                  nextSeqNo_
-              );
-
-              // Transition to GBN mode and short circuit
-              inGbnMode_ = true;
-              break;
             }
-            
-            unsigned int dropped_pkt_size = (datasize > img_size - nextSeqNo_)
-                ? img_size - nextSeqNo_ 
-                : datasize;
-
-            nextSeqNo_ += dropped_pkt_size;
-          }
         }
 
         // At this point, we might have transitioned into GBN mode or we might be ready to
@@ -727,8 +742,6 @@ netimg_recvimg(void)
       if (seqn > nextSeqNo_) {
   
         // Enumerate all dropped pkts
-        unsigned int next_seqno = nextSeqNo_;
-
         while (nextSeqNo_ < seqn) {
           //fprintf(stderr, "DEBUG: next-seqno: 0x%x, seqn: 0x%x\n", nextSeqNo_, seqn);
           // Determine type of dropped packet
