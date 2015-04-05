@@ -3,10 +3,10 @@ MKDEP=makedepend -Y
 OS := $(shell uname)
 ifeq ($(OS), Darwin)
   LIBS = -framework OpenGL -framework GLUT
-  CFLAGS = -g -Wall -Wno-deprecated $(DASGN)
+  CFLAGS = -g -Wall -Wno-deprecated $(DASGN) -std=c++11
 else
   LIBS = -lGL -lGLU -lglut
-  CFLAGS = -g -Wall -Wno-deprecated $(DASGN)
+  CFLAGS = -g -Wall -Wno-deprecated $(DASGN) -std=c++11
 endif
 
 BINS = netimg imgdb

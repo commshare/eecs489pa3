@@ -188,7 +188,7 @@ recvqry(int sd, iqry_t *iqry)
   );
 
   ihdr_t* temp_hdr = (ihdr_t *) iqry;
-  fprintf(stderr, "imgdb::recvqry() packet: vers: 0x%x, type: 0x%x, seqn: 0x%x\n",
+  fprintf(stderr, "imgdb::recvqry: packet: vers: 0x%x, type: 0x%x, seqn: 0x%x\n",
       temp_hdr->ih_vers, temp_hdr->ih_type, ntohl(temp_hdr->ih_seqn));
 
   if (bytes != sizeof(iqry_t)) {
@@ -241,8 +241,6 @@ sendpkt(int sd, char *pkt, int size, ihdr_t *ack)
     // Send 'pkt' to client
     int client_size = sizeof(client);
 
-    fprintf(stderr, "sendpkt::sendto(), i: %u\n", i);
-    
     sendto(
         sd,
         (void *) pkt,
@@ -330,20 +328,14 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
 
   // Send the imsg packet to client by calling sendpkt().
 
-  fprintf(stderr, "sendimg -> sendpkt: imsg: im_vers: 0x%x, type: 0x%x\n",
-      imsg->im_vers, imsg->im_type);
-
   ihdr_t ack;
   int imsg_result = this->sendpkt(sd, (char *) imsg, sizeof(imsg_t), &ack);
-  fprintf(stderr, "ack received: vers: 0x%x, type: 0x%x, seqn: 0x%x\n",
-      ack.ih_vers, ack.ih_type, ack.ih_seqn);
   if ((imsg_result == -1) || (ack.ih_seqn != (unsigned int) NETIMG_SYNSEQ)) {
     return;
   }
   
   //// Send image data ////
   if (image) {
-    fprintf(stderr, "preparing to send image...\n");
     char *ip = image; /* ip points to the start of image byte buffer */
     unsigned int datasize = mss - sizeof(ihdr_t) - NETIMG_UDPIP;
     
@@ -411,18 +403,8 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           ? window_limit
           : max_segment + 1;
       
-      // Send a usable-window-full of packets
-      // fprintf(
-      //     stderr,
-      //     "imgdb::sendimg() sending image, snd-next: %u, snd-limit: %u\n",
-      //     snd_next,
-      //     snd_limit
-      // );
-
       // Saturate sending window
       while (snd_next + (num_fec_sent - num_fec_acked) < snd_limit) {
-        fprintf(stderr, "LOOPSTART -- snd_una: %u, snd_next: %u, window: %u, snd_limit: %u\n",
-           snd_una, snd_next, window, snd_limit);
         
         // Compute segment dimensions
         long seqno = snd_next * datasize;
@@ -458,7 +440,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         // Probabilistically drop segment
         if (((float) random())/INT_MAX < pdrop) { /* drop segment */
           // Report dropped segment
-          fprintf(stderr, "imgdb_sendimg: DROPPED DATA packet with offset 0x%lx, %d bytes\n",
+          fprintf(stderr, "imgdb::sendimg: DROPPED DATA packet with offset 0x%lx, %d bytes\n",
                   seqno, segsize);
 
         } else { /* send segment */
@@ -482,7 +464,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
           net_assert(sendmsg(sd, &msg, 0) == -1, "imgdb::sendimg() Failed to send message");
          
           // Report segment send
-          fprintf(stderr, "imgdb_sendimg: sending packet 0x%lx, %d bytes\n",
+          fprintf(stderr, "imgdb::sendimg: sent DATA packet 0x%lx, %d bytes\n",
                   seqno, segsize);
         }
 
@@ -510,12 +492,10 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
          * ih_type field of the header also.
          */
         /* Lab6: YOUR CODE HERE */
-        fprintf(stderr, "FEC-SEND-LOGIC: snd-next: %u, fec-window-start: %u, fwnd: %u, seqno: 0x%lx, imgsize: 0x%lx\n",
-            snd_next, fec_window_start, fwnd, seqno, imgsize);
         if ((snd_next - fec_window_start) % fwnd == 0 || seqno == imgsize) {
           // Check if we should drops the packet
           if (((float) random())/INT_MAX < pdrop) {
-            fprintf(stderr, "imgdb_sendimg: DROPPED FEC packet with offset 0x%lx, 0x%x bytes\n",
+            fprintf(stderr, "imgdb::sendimg: DROPPED FEC packet 0x%lx, 0x%x bytes\n",
                     seqno, segsize);
           } else {
             // Prepare for FEC send
@@ -526,7 +506,7 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             iovec_arr[1].iov_base = (void *) fec_buff;
             iovec_arr[1].iov_len = datasize;
             
-            fprintf(stderr, "imgdb_sendimg: sent FEC packet with offset 0x%lx, %d bytes\n",
+            fprintf(stderr, "imgdb::sendimg: sent FEC packet 0x%lx, %d bytes\n",
                     seqno, datasize);
 
             int fec_send_result = sendmsg(sd, &msg, 0);
@@ -595,8 +575,6 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             // We've read all of the ACKs
             more_acks = false;
 
-            fprintf(stderr, "No more ACKS...\n");
-          
           } else { /* We've received an ACK, process it */
             // Fail due to invalid vers 
             net_assert(
@@ -621,24 +599,13 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
             // Detect ACKed FEC packets
             num_fec_acked = ack_seg / this->fwnd;
 
-            fprintf(stderr, "\n- Ack: vers: 0x%x, type: 0x%x, seqn: 0x%x\n", ack.ih_vers, ack.ih_type, htonl(ack.ih_seqn));
+            fprintf(stderr, "imgdb::sendimg: received ack: seqn: 0x%x\n", ntohl(ack.ih_seqn));
           }
         } while (more_acks);
 
-        fprintf(stderr, "Received ACKS! new snd_una: %u\n", snd_una);
-
       } else { /* We haven't received any traffic => RTO! */
         // Report GBN RTO!
-        fprintf(
-            stderr,
-            "- No ACKs received => Go-Back-N activated! snd-next: %u -> %u, fec-window-start: %u -> %u, num-fec-sent: %u -> %u\n",
-            snd_next,
-            snd_una,
-            fec_window_start,
-            snd_una,
-            num_fec_sent,
-            num_fec_acked
-        );
+        fprintf(stderr, "imgdb::sendimg: RTO! Retransmitting...\n");
 
         // Retransmit an entire window-full of segments starting at 'snd_una'
         snd_next = snd_una; 
@@ -646,11 +613,11 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         num_fec_sent = num_fec_acked;
       }
 
-      fprintf(stderr, "snd-una: 0x%x, max_segment: 0x%x\n", snd_una, max_segment);
 
     } while (snd_una <= max_segment); // iterate until we've acknowledged all pkts
 
-    fprintf(stderr, "- Sending FIN packet\n");
+    fprintf(stderr, "imgdb::sendimg: Sent FIN packet (0x%lx)\n", NETIMG_FINSEQ);
+    
     // Send NETIMG_FIN packet
     ihdr_t fin = {
         NETIMG_VERS,
@@ -658,11 +625,9 @@ sendimg(int sd, imsg_t *imsg, char *image, long imgsize, int numseg)
         0,
         htonl(NETIMG_FINSEQ)
     };
+
     ihdr_t ack;
     this->sendpkt(sd, (char *) &fin, sizeof(ihdr_t), &ack);
-
-    fprintf(stderr, "fin-ack: vers: 0x%x, type: 0x%x, seqn: 0x%x\n",
-        ack.ih_vers, ack.ih_type, ack.ih_seqn);
 
     delete[] fec_buff;
     fec_buff = nullptr;
