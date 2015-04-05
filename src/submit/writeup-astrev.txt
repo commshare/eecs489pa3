@@ -1,0 +1,3 @@
+1. Mac OS Yosemite, Linux RedHat (CAEN)
+2. Nothing really lol
+3. I wish we could've implemented TCP over UDP instead...that would've been cool 
